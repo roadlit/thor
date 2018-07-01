@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/pkg/errors"
 	"github.com/vechain/thor/api/utils"
 	"github.com/vechain/thor/logdb"
 )
@@ -32,7 +33,7 @@ func (t *Transfers) filter(ctx context.Context, filter *logdb.TransferFilter) ([
 	}
 	tLogs := make([]*FilteredTransfer, len(transfers))
 	for i, trans := range transfers {
-		tLogs[i] = ConvertTransfer(trans)
+		tLogs[i] = convertTransfer(trans)
 	}
 	return tLogs, nil
 }
@@ -40,7 +41,7 @@ func (t *Transfers) filter(ctx context.Context, filter *logdb.TransferFilter) ([
 func (t *Transfers) handleFilterTransferLogs(w http.ResponseWriter, req *http.Request) error {
 	var filter logdb.TransferFilter
 	if err := utils.ParseJSON(req.Body, &filter); err != nil {
-		return utils.BadRequest(err, "body")
+		return utils.BadRequest(errors.WithMessage(err, "body"))
 	}
 	order := req.URL.Query().Get("order")
 	if order != string(logdb.DESC) {
