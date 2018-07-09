@@ -39,10 +39,10 @@ type Options struct {
 	MaxLifetime     time.Duration
 }
 
-// TxEvent will be posted when tx is added or becomes executable.
+// TxEvent will be posted when tx is added or status changed.
 type TxEvent struct {
 	Tx         *tx.Transaction
-	Executable bool
+	Executable *bool
 }
 
 // TxPool maintains unprocessed transactions.
@@ -143,9 +143,7 @@ func (p *TxPool) SubscribeTxEvent(ch chan *TxEvent) event.Subscription {
 	return p.scope.Track(p.txFeed.Subscribe(ch))
 }
 
-// Add add new tx into pool.
-// It's not assumed as an error if the tx to be added is already in the pool,
-func (p *TxPool) Add(newTx *tx.Transaction) error {
+func (p *TxPool) add(newTx *tx.Transaction, rejectNonexecutable bool) error {
 	if p.all.Contains(newTx.ID()) {
 		// tx already in the pool
 		return nil
@@ -178,13 +176,17 @@ func (p *TxPool) Add(newTx *tx.Transaction) error {
 			return txRejectedError{err.Error()}
 		}
 
+		if rejectNonexecutable && !executable {
+			return txRejectedError{"tx is not executable"}
+		}
+
 		if err := p.all.Add(txObj, p.options.LimitPerAccount); err != nil {
 			return txRejectedError{err.Error()}
 		}
 
 		txObj.executable = executable
 		p.goes.Go(func() {
-			p.txFeed.Send(&TxEvent{newTx, executable})
+			p.txFeed.Send(&TxEvent{newTx, &executable})
 		})
 		log.Debug("tx added", "id", newTx.ID(), "executable", executable)
 	} else {
@@ -198,9 +200,21 @@ func (p *TxPool) Add(newTx *tx.Transaction) error {
 			return txRejectedError{err.Error()}
 		}
 		log.Debug("tx added", "id", newTx.ID())
+		p.txFeed.Send(&TxEvent{newTx, nil})
 	}
 	atomic.AddUint32(&p.addedAfterWash, 1)
 	return nil
+}
+
+// Add add new tx into pool.
+// It's not assumed as an error if the tx to be added is already in the pool,
+func (p *TxPool) Add(newTx *tx.Transaction) error {
+	return p.add(newTx, false)
+}
+
+// StrictlyAdd add new tx into pool. A rejection error will be returned, if tx is not executable at this time.
+func (p *TxPool) StrictlyAdd(newTx *tx.Transaction) error {
+	return p.add(newTx, true)
 }
 
 // Remove removes tx from pool by its ID.
@@ -342,7 +356,8 @@ func (p *TxPool) wash(headBlock *block.Header) (executables tx.Transactions, rem
 
 	p.goes.Go(func() {
 		for _, tx := range toBroadcast {
-			p.txFeed.Send(&TxEvent{tx, true})
+			executable := true
+			p.txFeed.Send(&TxEvent{tx, &executable})
 		}
 	})
 	return executables, 0, nil
